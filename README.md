@@ -150,8 +150,11 @@ INCLUDE_SAMPLES=true /usr/bin/python3 aomori_bot.py
 
 ## 設定ファイル
 
-`.env.example` を `.env` にコピーして API キーを設定すると、ローカルで `live` モードを試せます。
-`.env` は `.gitignore` 済みで、絶対にコミットしないでください。
+X の認証情報（`X_API_KEY` / `X_API_SECRET` / `X_ACCESS_TOKEN` / `X_ACCESS_TOKEN_SECRET`）は、**環境変数**から読み込みます。GitHub Actions では Secrets から渡されます。
+
+ローカルで実行する場合は、環境変数を自分で設定してください。`.env` ファイルは自動では読み込まれません（`.env.example` は、変数名の見本です）。`.env` は `.gitignore` 済みで、絶対にコミットしないでください。
+
+**注意**：`POST_MODE=live` でローカル実行すると、実際に X へ投稿されます。試すときは、投稿先のアカウントと、上限（`POST_DAILY_LIMIT` など）を確認してください。
 
 ---
 
