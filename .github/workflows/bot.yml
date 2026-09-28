@@ -1,0 +1,72 @@
+name: Aomori Disaster Bot
+
+# ================================================================
+# スケジュール: 10 分おき（毎時 0 分を避けた :07 スタート）
+# 手動実行も可能（workflow_dispatch）
+# ================================================================
+on:
+  schedule:
+    - cron: '7-59/10 * * * *'
+  workflow_dispatch:
+
+# ================================================================
+# 同時実行防止（前の実行が終わるまで待機）
+# ================================================================
+concurrency:
+  group: bot-run
+  cancel-in-progress: false   # 前の実行をキャンセルしない（完了を待つ）
+
+# ================================================================
+# 権限は最小限
+# contents: write → bot-state ブランチへの push に必要
+# ================================================================
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8      # 10 分インターバルに対して余裕を持たせたタイムアウト
+
+    steps:
+      # ────────────────────────────────────────────────
+      # 1. コードを取得（フル履歴: bot-state ブランチ操作に必要）
+      # ────────────────────────────────────────────────
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ────────────────────────────────────────────────
+      # 2. bot-state ブランチから状態ファイルを復元
+      # ────────────────────────────────────────────────
+      - name: Restore state from bot-state branch
+        id: restore
+        run: bash scripts/restore_state.sh
+
+      # ────────────────────────────────────────────────
+      # 3. ボット実行
+      #    - X API キー: Secrets から
+      #    - POST_MODE: Repository Variables から（未設定なら dry）
+      # ────────────────────────────────────────────────
+      - name: Run bot
+        env:
+          X_API_KEY:             ${{ secrets.X_API_KEY }}
+          X_API_SECRET:          ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN:        ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          POST_MODE:             ${{ vars.POST_MODE || 'dry' }}
+          POST_MAX_AGE_MIN:      ${{ vars.POST_MAX_AGE_MIN || '90' }}
+          POST_DAILY_LIMIT:      ${{ vars.POST_DAILY_LIMIT || '10' }}
+          POST_PER_RUN_LIMIT:    ${{ vars.POST_PER_RUN_LIMIT || '3' }}
+          ENABLE_P2P:            ${{ vars.ENABLE_P2P || 'false' }}
+        run: /usr/bin/python3 aomori_bot.py
+
+      # ────────────────────────────────────────────────
+      # 4. 状態を bot-state ブランチに保存
+      #    - always() で成功・失敗どちらでも実行
+      #    - scripts/save_state.sh で孤立ブランチ作成・ハートビート・リトライを処理
+      # ────────────────────────────────────────────────
+      - name: Save state to bot-state branch
+        if: ${{ always() && steps.restore.outcome == 'success' }}
+        run: bash scripts/save_state.sh

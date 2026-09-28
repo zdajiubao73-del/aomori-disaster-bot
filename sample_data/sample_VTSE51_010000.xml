@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ★疑似電文★ 実際の気象庁発表電文ではありません。テスト用サンプルです。 -->
+<!-- 元形式: 津波警報・注意報・予報 (VTSE51) 全国向け -->
+<Report xmlns="http://xml.kishou.go.jp/jmaxml1/">
+  <Control>
+    <Title>津波警報・注意報・予報a</Title>
+    <DateTime>2026-09-28T08:00:00Z</DateTime>
+    <Status>通常</Status>
+    <EditorialOffice>気象庁予報部</EditorialOffice>
+  </Control>
+  <Head xmlns="http://xml.kishou.go.jp/jmaxml1/informationBasis1/">
+    <Title>津波警報・注意報・予報a</Title>
+    <ReportDateTime>2026-09-28T12:00:00+09:00</ReportDateTime>
+    <InfoType>発表</InfoType>
+    <Headline>
+      <Text>青森県太平洋沿岸に津波注意報を発表しました。海岸付近では直ちに安全な場所に移動してください。</Text>
+    </Headline>
+  </Head>
+  <Body xmlns="http://xml.kishou.go.jp/jmaxml1/body/seismology1/"/>
+</Report>

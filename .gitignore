@@ -1,0 +1,6 @@
+state/seen_ids.json
+state/daily_count.json
+logs/
+__pycache__/
+*.pyc
+.env

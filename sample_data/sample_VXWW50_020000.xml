@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ★疑似電文★ 実際の気象庁発表電文ではありません。テスト用サンプルです。 -->
+<!-- 元形式: 土砂災害警戒情報 (VXWW50) 青森県 -->
+<Report xmlns="http://xml.kishou.go.jp/jmaxml1/">
+  <Control>
+    <Title>土砂災害警戒情報</Title>
+    <DateTime>2026-09-28T08:00:00Z</DateTime>
+    <Status>通常</Status>
+    <EditorialOffice>青森地方気象台</EditorialOffice>
+  </Control>
+  <Head xmlns="http://xml.kishou.go.jp/jmaxml1/informationBasis1/">
+    <Title>青森県土砂災害警戒情報</Title>
+    <ReportDateTime>2026-09-28T17:00:00+09:00</ReportDateTime>
+    <InfoType>発表</InfoType>
+    <Headline>
+      <Text>青森県（津軽南部）では、土砂災害警戒情報が発表されました。土砂災害に厳重に警戒してください。</Text>
+    </Headline>
+  </Head>
+  <Body xmlns="http://xml.kishou.go.jp/jmaxml1/body/meteorology1/"/>
+</Report>

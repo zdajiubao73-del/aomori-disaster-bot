@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ★疑似電文★ 実際の気象庁発表電文ではありません。テスト用サンプルです。 -->
+<!-- 元形式: 震源・震度に関する情報 (VXSE53) 青森県震度3 -->
+<Report xmlns="http://xml.kishou.go.jp/jmaxml1/">
+  <Control>
+    <Title>震源・震度に関する情報</Title>
+    <DateTime>2026-09-28T08:00:00Z</DateTime>
+    <Status>通常</Status>
+    <EditorialOffice>気象庁地震火山部</EditorialOffice>
+  </Control>
+  <Head xmlns="http://xml.kishou.go.jp/jmaxml1/informationBasis1/">
+    <Title>震源・震度に関する情報</Title>
+    <ReportDateTime>2026-09-28T09:10:00+09:00</ReportDateTime>
+    <InfoType>発表</InfoType>
+    <Headline>
+      <Text>28日09時00分ころ、地震がありました。</Text>
+    </Headline>
+  </Head>
+  <Body xmlns="http://xml.kishou.go.jp/jmaxml1/body/seismology1/"
+        xmlns:jmx_eb="http://xml.kishou.go.jp/jmaxml1/elementBasis1/">
+    <Earthquake>
+      <OriginTime>2026-09-28T09:00:00+09:00</OriginTime>
+      <Hypocenter>
+        <Area>
+          <Name>青森県東方沖</Name>
+          <Coordinate description="北緯41.5度 東経142.0度 深さ50km">+41.5+142.0-50000/</Coordinate>
+        </Area>
+      </Hypocenter>
+      <jmx_eb:Magnitude type="Mj" description="Ｍ４．５">4.5</jmx_eb:Magnitude>
+    </Earthquake>
+    <Intensity>
+      <Observation>
+        <MaxInt>3</MaxInt>
+        <Pref>
+          <Name>青森県</Name>
+          <MaxInt>3</MaxInt>
+          <Area>
+            <Name>青森県三八上北</Name>
+            <MaxInt>3</MaxInt>
+            <City>
+              <Name>八戸市</Name>
+              <MaxInt>3</MaxInt>
+            </City>
+          </Area>
+          <Area>
+            <Name>青森県下北</Name>
+            <MaxInt>2</MaxInt>
+          </Area>
+        </Pref>
+        <Pref>
+          <Name>岩手県</Name>
+          <MaxInt>2</MaxInt>
+          <Area>
+            <Name>岩手県沿岸北部</Name>
+            <MaxInt>2</MaxInt>
+          </Area>
+        </Pref>
+      </Observation>
+    </Intensity>
+  </Body>
+</Report>
