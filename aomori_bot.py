@@ -43,14 +43,26 @@ QUAKE_MIN_INT_STR = "3"   # JMA 震度 3 以上
 P2P_MIN_SCALE     = 30    # P2P scale 値で震度 3 相当
 
 # 対象プロダクトコード
+#
+# VPWW53 のみを気象警報・注意報の投稿元とする。
+#
+# 除外した種別と理由（資料: https://xml.kishou.go.jp/tec_material.html 表1.1）:
+#   VPWW54: 地方気象情報（H27 フォーマット）… VPWW53 と同一内容の旧フォーマット版。
+#           実測で 020000 に対して VPWW53 と同数・同タイミングで発行を確認。
+#   VPWW55: 大雨警報・注意報（R06 フォーマット）… VPWW53 の大雨種別を分割した電文。
+#           VPWW53 に同じ内容が含まれる。
+#   VPWW56: 土砂崩れ注意報（R06 フォーマット）… VPWW53 の土砂種別を分割した電文。
+#   VPWW58: 暴風・強風注意報（R06 フォーマット）… VPWW53 の暴風種別を分割した電文。
+#   VPWW59: 波浪注意報（R06 フォーマット）… VPWW53 の波浪種別を分割した電文。
+#   VPWW61: 竜巻・雷注意報（R06 フォーマット）… VPWW53 の雷/竜巻種別を分割した電文。
+#           VPWW53 が「青森県では、落雷に注意してください。」を含む際に並行発行を確認。
+#
+# VXWW50/VPOA50/VPHW62 は警報・注意報系とは別カテゴリの専用電文のため継続。
 WEATHER_PRODUCTS = {
-    "VPWW53", "VPWW54",   # 気象特別警報・警報・注意報
-    "VPWW55", "VPWW56",   # 大雨・土砂
-    "VPWW61",             # その他注意報
-    "VPWW58", "VPWW59",   # 暴風・波浪
-    "VXWW50",             # 土砂災害警戒情報
-    "VPOA50",             # 記録的短時間大雨情報
-    "VPHW62",             # 竜巻注意情報
+    "VPWW53",    # 府県気象情報（気象特別警報・警報・注意報）― 青森県の主たる電文
+    "VXWW50",    # 土砂災害警戒情報
+    "VPOA50",    # 記録的短時間大雨情報
+    "VPHW62",    # 竜巻注意情報
 }
 TSUNAMI_PRODUCTS = {"VTSE41", "VTSE51", "VTSE52"}
 QUAKE_PRODUCTS   = {"VXSE53", "VXSE51", "VXSE52"}
@@ -235,6 +247,32 @@ def p2p_scale_to_str(scale: int) -> str:
     return tbl.get(scale, str(scale))
 
 
+# ===== VPWW53 Kind/Status チェック =====
+
+def _has_new_kind(root) -> bool:
+    """
+    Body/Warning 内の Kind/Status に「発表」「警報から注意報へ移行」などの
+    新規・変化ステータスが含まれる場合 True を返す。
+
+    Status が全て「継続」または「発表警報・注意報はなし」のみなら False
+    （定時再発表・同一内容の再送出 → 投稿しない）。
+    Status 要素が見つからない場合は True（安全側：投稿する）。
+
+    対象要素: Body > Warning type="気象警報・注意報（府県予報区等）" > Item > Kind > Status
+    """
+    statuses: list[str] = []
+    for elem in root.iter():
+        if local(elem.tag) == "Warning":
+            for kind_elem in elem.iter():
+                if local(kind_elem.tag) == "Status" and kind_elem.text:
+                    statuses.append(kind_elem.text.strip())
+    if not statuses:
+        return True   # ステータス情報なし → 安全側（投稿する）
+    # 「継続」と「発表警報・注意報はなし」以外のステータスが 1 つでもあれば新規
+    skip_values = {"継続", "発表警報・注意報はなし"}
+    return any(s not in skip_values for s in statuses)
+
+
 # ===== 解除フィルタ =====
 
 def _is_cancel_to_skip(headline: str, info_type: str) -> bool:
@@ -262,12 +300,14 @@ def _is_cancel_to_skip(headline: str, info_type: str) -> bool:
 
 def _parse_weather_xml_full(data: bytes, product: str) -> tuple:
     """
-    内部実装：VPWW53/54/55/56 等を解析して (text, info_type, label) を返す。
-    青森県に関係ない場合・解除スキップ対象は (None, info_type, label) を返す。
+    内部実装：VPWW53 等を解析して (text, info_type, label, headline) を返す。
+    青森県に関係ない場合・スキップ対象は (None, info_type, label, headline) を返す。
 
     Returns
     -------
-    (post_text_or_None, info_type, label)
+    (post_text_or_None, info_type, label, headline)
+      headline : クールダウンキーとして使う生テキスト（XML の Headline/Text）。
+                 投稿しない場合も返す（クールダウン記録不要なので呼び出し側で無視する）。
     """
     root = ET.fromstring(data)
 
@@ -285,31 +325,40 @@ def _parse_weather_xml_full(data: bytes, product: str) -> tuple:
                     break
 
     if not headline:
-        return None, info_type, ""
+        return None, info_type, "", ""
 
     # 青森県関連チェック
     if not any(kw in headline for kw in AOMORI_KEYWORDS):
         if "青森" not in title:
-            return None, info_type, ""
+            return None, info_type, "", ""
 
     label  = classify_weather_label(product, headline)
 
     # 注意報の解除はスキップ
     if _is_cancel_to_skip(headline, info_type):
-        return None, info_type, label
+        return None, info_type, label, headline
+
+    # VPWW53: Kind/Status が全て「継続」または「発表警報・注意報はなし」なら
+    # 状態変化なし（定時再発表・同一内容の再送）→ 投稿しない
+    if product == "VPWW53" and not _has_new_kind(root):
+        logging.info(
+            f"  継続のみ: VPWW53 の全 Kind が継続ステータス → 投稿しない"
+            f"（headline={headline[:40]}）"
+        )
+        return None, info_type, label, headline
 
     dt_str = format_jst(report_dt)
     prefix = f"{dt_str} " if dt_str else ""
     text   = truncate140(f"【{label}】{prefix}{headline}\n出典：気象庁")
 
-    return text, info_type, label
+    return text, info_type, label, headline
 
 
 def parse_weather_xml(data: bytes, product: str):
     """
     公開 API（後方互換）: 投稿文を返す。青森県関係なし・不要な場合は None。
     """
-    text, _, _ = _parse_weather_xml_full(data, product)
+    text, _, _, _ = _parse_weather_xml_full(data, product)
     return text
 
 
@@ -430,11 +479,12 @@ def process_p2p_quakes(quakes: list, seen_ids: set, enable_p2p: bool = True) -> 
             f"青森県内の最大震度は{int_str}です。\n出典：気象庁"
         )
         posts.append({
-            "id":      qid,
-            "type":    "earthquake_p2p",
-            "text":    truncate140(text),
-            "source":  "P2P地震情報",
-            "updated": etime,
+            "id":           qid,
+            "type":         "earthquake_p2p",
+            "text":         truncate140(text),
+            "source":       "P2P地震情報",
+            "updated":      etime,
+            "headline_key": "",   # 地震は内容が毎回異なるためクールダウン対象外
         })
         # P2P は関数内で即座に seen_ids に追加する
         # （同一実行内の重複を防ぐため。JMA フィードとは異なる設計）
@@ -483,8 +533,10 @@ def process_weather_feed(seen_ids: set) -> list:
             continue
 
         post_text = None
+        headline_key = ""
         if product in WEATHER_PRODUCTS:
-            post_text = parse_weather_xml(xml_data, product)
+            # _parse_weather_xml_full を直接呼び出してクールダウンキーも取得する
+            post_text, _, _, headline_key = _parse_weather_xml_full(xml_data, product)
         elif product in TSUNAMI_PRODUCTS:
             post_text = parse_tsunami_xml(xml_data)
         # 地震は eqvol_l.xml で別途処理
@@ -492,11 +544,12 @@ def process_weather_feed(seen_ids: set) -> list:
         if post_text:
             # 投稿候補として返す（seen_ids にはまだ追加しない）
             posts.append({
-                "id":      eid,
-                "type":    product,
-                "text":    post_text,
-                "source":  "JMA XML (extra_l)",
-                "updated": entry["updated"],
+                "id":           eid,
+                "type":         product,
+                "text":         post_text,
+                "source":       "JMA XML (extra_l)",
+                "updated":      entry["updated"],
+                "headline_key": headline_key,
             })
         else:
             # 投稿不要 → 即座にスキップ済みとして記録
@@ -541,11 +594,12 @@ def process_eqvol_feed(seen_ids: set) -> list:
 
         if post_text:
             posts.append({
-                "id":      eid,
-                "type":    product,
-                "text":    post_text,
-                "source":  "JMA XML (eqvol_l)",
-                "updated": entry["updated"],
+                "id":           eid,
+                "type":         product,
+                "text":         post_text,
+                "source":       "JMA XML (eqvol_l)",
+                "updated":      entry["updated"],
+                "headline_key": "",   # 地震は内容が毎回異なるためクールダウン対象外
             })
         else:
             seen_ids.add(eid)
@@ -600,12 +654,13 @@ def process_sample_data(seen_ids: set) -> list:
 
         if post_text:
             posts.append({
-                "id":        sample_id,
-                "type":      product,
-                "text":      post_text,
-                "source":    f"疑似電文（{fname}）",
-                "is_sample": True,
-                "updated":   "",   # サンプルは鮮度フィルタ対象外
+                "id":           sample_id,
+                "type":         product,
+                "text":         post_text,
+                "source":       f"疑似電文（{fname}）",
+                "is_sample":    True,
+                "updated":      "",   # サンプルは鮮度フィルタ対象外
+                "headline_key": "",   # サンプルはクールダウン対象外
             })
 
     return posts
@@ -705,6 +760,9 @@ def run(reset: bool = False) -> list:
 
     seen_ids = load_seen_ids()
 
+    # クールダウン状態を読み込む
+    cooldown = safety.load_warn_cooldown(STATE_DIR)
+
     # live モードでは認証情報を事前確認する
     credentials = None
     if cfg["post_mode"] == "live":
@@ -765,10 +823,25 @@ def run(reset: bool = False) -> list:
             logging.error(f"  文面ガード NG: {post['id']} - {e}")
             seen_ids.add(post["id"])
 
+    # ----- クールダウン確認 -----
+    # 同じ見出し（headline_key）が設定した時間内に投稿済みなら見送る。
+    # クールダウンは live モードの実投稿後のみ更新する（dry-run では更新しない）。
+    no_cooldown_candidates = []
+    for post in checked_candidates:
+        hkey = post.get("headline_key", "")
+        if safety.is_in_cooldown(hkey, cooldown, cfg["cooldown_hours"]):
+            logging.info(
+                f"  クールダウン: {post['id']} を見送り"
+                f"（{cfg['cooldown_hours']}時間以内に同一内容を投稿済み）"
+            )
+            seen_ids.add(post["id"])
+        else:
+            no_cooldown_candidates.append(post)
+
     # ----- 上限適用 -----
     daily_count = safety.load_daily_count(STATE_DIR)
     to_post, skipped_by_limit = safety.apply_limits(
-        checked_candidates,
+        no_cooldown_candidates,
         daily_count,
         cfg["daily_limit"],
         cfg["per_run_limit"],
@@ -827,13 +900,15 @@ def run(reset: bool = False) -> list:
                 # 失敗したアイテムは seen_ids に追加しない
                 save_seen_ids(seen_ids)  # これまでの成功分を保存して終了
                 safety.save_daily_count(daily_count, STATE_DIR)
+                safety.save_warn_cooldown(cooldown, STATE_DIR)
                 sys.exit(1)
 
-            # 投稿成功 → 即座に記録
+            # 投稿成功 → 即座に記録・クールダウン更新
             seen_ids.add(post["id"])
             save_seen_ids(seen_ids)
             daily_count += 1
             safety.save_daily_count(daily_count, STATE_DIR)
+            safety.update_warn_cooldown(post.get("headline_key", ""), cooldown)
             posted.append(post)
 
     else:
@@ -847,21 +922,30 @@ def run(reset: bool = False) -> list:
     # ----- 最終保存 -----
     save_seen_ids(seen_ids)
     safety.save_daily_count(daily_count, STATE_DIR)
+    # クールダウンは live モードの場合のみ実投稿があったとして保存する。
+    # dry モードでは cooldown に変更がなくても保存して状態ファイルを維持する。
+    safety.save_warn_cooldown(cooldown, STATE_DIR)
 
     logging.info(
         f"完了: 投稿={len(posted)}件  "
         f"本日合計={daily_count}件"
     )
 
-    # 上限超過があった場合は失敗として終了する。
-    # → GitHub Actions の失敗通知メールが届く。
-    # → 見送り分はすでに seen_ids に追加済みなので、次回実行で同じ通知は出ない。
+    # 上限超過があった場合の終了コード。
+    # live モード: 終了コード 1 → GitHub Actions の失敗通知メールが届く。
+    # dry  モード: 警告ログのみ。終了コード 0（通知メールが来てうるさいため）。
+    # 見送り分はすでに seen_ids に追加済みなので、次回実行で同じ通知は出ない。
     if skipped_by_limit:
-        logging.warning(
-            "[LIMIT] 上限超過が発生したため終了コード 1 で終了します"
-            "（GitHub Actions の失敗通知メールが届きます）。"
-        )
-        sys.exit(1)
+        if cfg["post_mode"] == "live":
+            logging.warning(
+                "[LIMIT] 上限超過が発生したため終了コード 1 で終了します"
+                "（GitHub Actions の失敗通知メールが届きます）。"
+            )
+            sys.exit(1)
+        else:
+            logging.warning(
+                "[LIMIT] 上限超過がありました（dryモード: 終了コード 0 のまま続行）"
+            )
 
     return posted
 

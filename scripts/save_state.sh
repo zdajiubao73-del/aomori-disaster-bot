@@ -37,8 +37,9 @@ fi
 mkdir -p "$BOT_STATE_DIR/state"
 
 # 状態ファイルをコピー
-[ -f state/seen_ids.json    ] && cp state/seen_ids.json    "$BOT_STATE_DIR/state/"
-[ -f state/daily_count.json ] && cp state/daily_count.json "$BOT_STATE_DIR/state/"
+[ -f state/seen_ids.json      ] && cp state/seen_ids.json      "$BOT_STATE_DIR/state/"
+[ -f state/daily_count.json   ] && cp state/daily_count.json   "$BOT_STATE_DIR/state/"
+[ -f state/warn_cooldown.json ] && cp state/warn_cooldown.json "$BOT_STATE_DIR/state/"
 
 # ハートビート：UTC 日付が変わったときだけ last_run.txt を更新
 # 60 日間コミットがないと GitHub Actions のスケジュールが停止するため、

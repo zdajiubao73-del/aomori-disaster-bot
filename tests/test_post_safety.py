@@ -701,9 +701,9 @@ ok("DuplicatePostError は HTTPError のサブクラスではない",
 
 
 # ---------------------------------------------------------------------------
-# O. 上限超過通知（sys.exit(1) と seen_ids への追加）
+# O. 上限超過通知（live モード: sys.exit(1) と seen_ids への追加）
 # ---------------------------------------------------------------------------
-print("\n== O. 上限超過通知 ==")
+print("\n== O. 上限超過通知（liveモード）==")
 
 import contextlib
 import logging as _logging
@@ -711,20 +711,28 @@ import logging as _logging
 _fresh_ts_o = iso(now_utc() - timedelta(minutes=5))
 _mock_candidates_o = [
     {
-        "id": "over_001",
-        "type": "VPWW53",
-        "text": "【気象注意報】津軽では強風に注意してください。\n出典：気象庁",
-        "source": "JMA XML",
-        "updated": _fresh_ts_o,
+        "id":           "over_001",
+        "type":         "VPWW53",
+        "text":         "【気象注意報】津軽では強風に注意してください。\n出典：気象庁",
+        "source":       "JMA XML",
+        "updated":      _fresh_ts_o,
+        "headline_key": "",
     },
     {
-        "id": "over_002",
-        "type": "VPWW53",
-        "text": "【気象注意報】下北では強風に注意してください。\n出典：気象庁",
-        "source": "JMA XML",
-        "updated": _fresh_ts_o,
+        "id":           "over_002",
+        "type":         "VPWW53",
+        "text":         "【気象注意報】下北では強風に注意してください。\n出典：気象庁",
+        "source":       "JMA XML",
+        "updated":      _fresh_ts_o,
+        "headline_key": "",
     },
 ]
+
+# live モード用ダミー認証情報（外部通信なし: post_tweet をモックするため使われない）
+_live_creds_o = {
+    "api_key": "k", "api_secret": "s",
+    "access_token": "t", "access_token_secret": "ts",
+}
 
 with tempfile.TemporaryDirectory() as _od:
 
@@ -744,7 +752,12 @@ with tempfile.TemporaryDirectory() as _od:
                                         return_value=[]))
         _stack.enter_context(mock.patch("aomori_bot.process_sample_data",
                                         return_value=[]))
+        _stack.enter_context(mock.patch("x_poster.load_credentials",
+                                        return_value=_live_creds_o))
+        _stack.enter_context(mock.patch("x_poster.post_tweet",
+                                        return_value="mock_tweet_live_1234"))
         _stack.enter_context(mock.patch.dict(os.environ, {
+            "POST_MODE":          "live",
             "POST_DAILY_LIMIT":   "1",   # 1 件しか通さない → over_002 が skipped
             "POST_PER_RUN_LIMIT": "5",
             "ENABLE_P2P":         "false",
@@ -752,22 +765,60 @@ with tempfile.TemporaryDirectory() as _od:
 
         try:
             bot.run()
-            ok("上限超過: sys.exit(1) が呼ばれる", False, "sys.exit が呼ばれなかった")
+            ok("上限超過(live): sys.exit(1) が呼ばれる", False, "sys.exit が呼ばれなかった")
         except SystemExit as _se:
-            ok("上限超過: sys.exit(1) が呼ばれる", _se.code == 1, f"code={_se.code}")
+            ok("上限超過(live): sys.exit(1) が呼ばれる", _se.code == 1, f"code={_se.code}")
 
     # seen_ids.json に通過分・見送り分の両方が記録されているか確認
     _sp = os.path.join(_od, "seen_ids.json")
     if os.path.exists(_sp):
         with open(_sp) as _f:
             _saved_ids = set(json.load(_f))
-        ok("上限超過: 通過した item が seen_ids に追加された",
+        ok("上限超過(live): 通過した item が seen_ids に追加された",
            "over_001" in _saved_ids, f"ids={_saved_ids}")
-        ok("上限超過: 見送った item も seen_ids に追加された（繰り返し通知を防ぐ）",
+        ok("上限超過(live): 見送った item も seen_ids に追加された（繰り返し通知を防ぐ）",
            "over_002" in _saved_ids, f"ids={_saved_ids}")
     else:
-        ok("上限超過: 通過した item が seen_ids に追加された", False, "file not found")
-        ok("上限超過: 見送った item も seen_ids に追加された", False, "file not found")
+        ok("上限超過(live): 通過した item が seen_ids に追加された", False, "file not found")
+        ok("上限超過(live): 見送った item も seen_ids に追加された", False, "file not found")
+
+
+# ---------------------------------------------------------------------------
+# O2. 上限超過・dryモード（終了コード 0：失敗メール不要）
+# ---------------------------------------------------------------------------
+print("\n== O2. 上限超過通知（dryモード: 終了コード0）==")
+
+with tempfile.TemporaryDirectory() as _od2:
+
+    def _fake_setup_logging2():
+        _logging.basicConfig(
+            level=_logging.WARNING,
+            handlers=[_logging.StreamHandler(sys.stdout)],
+            force=True,
+        )
+
+    with contextlib.ExitStack() as _stack2:
+        _stack2.enter_context(mock.patch("aomori_bot.STATE_DIR", _od2))
+        _stack2.enter_context(mock.patch("aomori_bot.setup_logging", _fake_setup_logging2))
+        _stack2.enter_context(mock.patch("aomori_bot.process_weather_feed",
+                                         return_value=_mock_candidates_o))
+        _stack2.enter_context(mock.patch("aomori_bot.process_eqvol_feed",
+                                         return_value=[]))
+        _stack2.enter_context(mock.patch("aomori_bot.process_sample_data",
+                                         return_value=[]))
+        _stack2.enter_context(mock.patch.dict(os.environ, {
+            "POST_MODE":          "dry",
+            "POST_DAILY_LIMIT":   "1",   # 1 件しか通さない → over_002 が skipped
+            "POST_PER_RUN_LIMIT": "5",
+            "ENABLE_P2P":         "false",
+        }, clear=False))
+
+        try:
+            bot.run()
+            ok("上限超過(dry): sys.exit が呼ばれない（終了コード 0）", True)
+        except SystemExit as _se2:
+            ok("上限超過(dry): sys.exit が呼ばれない（終了コード 0）",
+               False, f"code={_se2.code}")
 
 
 # ---------------------------------------------------------------------------

@@ -30,7 +30,8 @@ fi
 # ── ブランチあり → fetch・取り出し ────────────────────────────────
 # fetch または取り出しに失敗した場合は set -e によりエラー終了する
 git fetch origin bot-state
-git show origin/bot-state:state/seen_ids.json    > state/seen_ids.json
-git show origin/bot-state:state/daily_count.json > state/daily_count.json 2>/dev/null || true
+git show origin/bot-state:state/seen_ids.json      > state/seen_ids.json
+git show origin/bot-state:state/daily_count.json   > state/daily_count.json   2>/dev/null || true
+git show origin/bot-state:state/warn_cooldown.json > state/warn_cooldown.json 2>/dev/null || true
 
 echo "状態ファイルを bot-state ブランチから復元しました"

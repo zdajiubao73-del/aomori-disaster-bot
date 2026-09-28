@@ -44,11 +44,12 @@ def get_config() -> dict:
         enable_p2p    : bool             （既定: False）
     """
     return {
-        "post_mode":     os.environ.get("POST_MODE", "dry").lower(),
-        "max_age_min":   int(os.environ.get("POST_MAX_AGE_MIN",   "90")),
-        "daily_limit":   int(os.environ.get("POST_DAILY_LIMIT",   "10")),
-        "per_run_limit": int(os.environ.get("POST_PER_RUN_LIMIT", "3")),
-        "enable_p2p":    os.environ.get("ENABLE_P2P", "false").lower() == "true",
+        "post_mode":      os.environ.get("POST_MODE", "dry").lower(),
+        "max_age_min":    int(os.environ.get("POST_MAX_AGE_MIN",    "90")),
+        "daily_limit":    int(os.environ.get("POST_DAILY_LIMIT",    "10")),
+        "per_run_limit":  int(os.environ.get("POST_PER_RUN_LIMIT",  "3")),
+        "enable_p2p":     os.environ.get("ENABLE_P2P", "false").lower() == "true",
+        "cooldown_hours": int(os.environ.get("POST_COOLDOWN_HOURS", "3")),
     }
 
 
@@ -144,6 +145,84 @@ def save_daily_count(count: int, state_dir: str) -> None:
     today = datetime.now(JST).strftime("%Y-%m-%d")
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"date": today, "count": count}, f, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# クールダウン（同一内容の再投稿抑制）
+# ---------------------------------------------------------------------------
+
+def load_warn_cooldown(state_dir: str) -> dict:
+    """
+    warn_cooldown.json を読み込む。
+    フォーマット: {headline_key: ISO8601_datetime_str, ...}
+    ファイルなし・JSON 不正の場合は空の dict を返す。
+    """
+    path = os.path.join(state_dir, "warn_cooldown.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_warn_cooldown(cooldown: dict, state_dir: str, retain_hours: int = 24) -> None:
+    """
+    warn_cooldown.json を保存する。
+    retain_hours より古いエントリは削除してファイルの肥大化を防ぐ。
+
+    Parameters
+    ----------
+    cooldown     : {headline_key: iso_datetime_str}
+    state_dir    : 保存先ディレクトリ
+    retain_hours : この時間より古いエントリを削除（既定 24 時間）
+    """
+    now_utc = datetime.now(timezone.utc)
+    cleaned: dict = {}
+    for key, ts_str in cooldown.items():
+        try:
+            ts    = datetime.fromisoformat(ts_str)
+            age_h = (now_utc - ts.astimezone(timezone.utc)).total_seconds() / 3600
+            if age_h < retain_hours:
+                cleaned[key] = ts_str
+        except Exception:
+            pass  # 壊れたエントリは除去
+    os.makedirs(state_dir, exist_ok=True)
+    path = os.path.join(state_dir, "warn_cooldown.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cleaned, f, ensure_ascii=False, indent=2)
+
+
+def is_in_cooldown(headline_key: str, cooldown: dict, cooldown_hours: int) -> bool:
+    """
+    headline_key がクールダウン中かどうかを返す。
+
+    Returns True if the same headline_key was posted within cooldown_hours.
+    Returns False if:
+      - headline_key が空文字（クールダウン対象外）
+      - headline_key が cooldown 辞書にない（初回）
+      - 記録時刻から cooldown_hours 以上経過している
+    """
+    if not headline_key:
+        return False
+    if headline_key not in cooldown:
+        return False
+    try:
+        last_ts = datetime.fromisoformat(cooldown[headline_key])
+        age_h   = (
+            datetime.now(timezone.utc) - last_ts.astimezone(timezone.utc)
+        ).total_seconds() / 3600
+        return age_h < cooldown_hours
+    except Exception:
+        return False  # パースエラーはクールダウンしない（安全側）
+
+
+def update_warn_cooldown(headline_key: str, cooldown: dict) -> None:
+    """
+    cooldown 辞書の headline_key に現在 UTC 時刻を記録する。
+    headline_key が空文字の場合は何もしない。
+    """
+    if headline_key:
+        cooldown[headline_key] = datetime.now(timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------------------
