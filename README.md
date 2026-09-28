@@ -122,10 +122,29 @@ INCLUDE_SAMPLES=true /usr/bin/python3 aomori_bot.py
 # ドライラン・状態リセット
 /usr/bin/python3 aomori_bot.py --reset
 
-# テスト実行
+# テスト実行（全5ファイル）
 /usr/bin/python3 tests/test_filters.py
+/usr/bin/python3 tests/test_new_features.py
 /usr/bin/python3 tests/test_post_safety.py
+/usr/bin/python3 tests/test_state_scripts.py
+/usr/bin/python3 tests/test_fixtures.py
+
+# 過去7日分のリプレイ集計（ネットワーク必要）
+/usr/bin/python3 tests/replay_extra_l.py
 ```
+
+---
+
+## テストフィクスチャについて
+
+`tests/fixtures/` には、気象庁の防災情報 XML フィードから取得した**実際の電文 XML**が含まれています。
+
+- **出典**: 気象庁防災情報 XML (https://www.data.jma.go.jp/developer/xml/)
+- **種別**: VPWW53（気象警報・注意報）、VPHW50/51（竜巻注意情報）
+- **対象**: 青森県（エリアコード 020000）
+- **目的**: フィルタリングロジックの回帰テスト用
+
+これらのデータは気象庁が一般公開している防災情報であり、個人情報は含まれていません。
 
 ---
 

@@ -56,13 +56,20 @@ P2P_MIN_SCALE     = 30    # P2P scale 値で震度 3 相当
 #   VPWW59: 波浪注意報（R06 フォーマット）… VPWW53 の波浪種別を分割した電文。
 #   VPWW61: 竜巻・雷注意報（R06 フォーマット）… VPWW53 の雷/竜巻種別を分割した電文。
 #           VPWW53 が「青森県では、落雷に注意してください。」を含む際に並行発行を確認。
+#   VPHW62: 存在しないコード（実フィードで確認済み）。旧資料の誤記とみなして除外。
 #
-# VXWW50/VPOA50/VPHW62 は警報・注意報系とは別カテゴリの専用電文のため継続。
+# VXWW50/VPOA50/VPHW50/VPHW51 は警報・注意報系とは別カテゴリの専用電文のため継続。
+#
+# 竜巻注意情報のコードについて:
+#   VPHW50: 竜巻注意情報（無目撃）       … 全国フィードで実在を確認（2026-09-28 時点）。
+#   VPHW51: 竜巻注意情報（目撃情報付き）… VPHW50 と同時刻に同一ヘッドラインで発行される。
+#           テキストが同一のため _dedup_by_text で 1 件に集約する。
 WEATHER_PRODUCTS = {
     "VPWW53",    # 府県気象情報（気象特別警報・警報・注意報）― 青森県の主たる電文
     "VXWW50",    # 土砂災害警戒情報
     "VPOA50",    # 記録的短時間大雨情報
-    "VPHW62",    # 竜巻注意情報
+    "VPHW50",    # 竜巻注意情報（無目撃）
+    "VPHW51",    # 竜巻注意情報（目撃情報付き）
 }
 TSUNAMI_PRODUCTS = {"VTSE41", "VTSE51", "VTSE52"}
 QUAKE_PRODUCTS   = {"VXSE53", "VXSE51", "VXSE52"}
@@ -215,7 +222,7 @@ def classify_weather_label(product: str, headline: str) -> str:
         return "土砂災害警戒情報"
     if product == "VPOA50":
         return "記録的短時間大雨情報"
-    if product == "VPHW62":
+    if product in {"VPHW50", "VPHW51"}:
         return "竜巻注意情報"
     if "特別警報" in headline:
         return "気象特別警報"
@@ -251,26 +258,58 @@ def p2p_scale_to_str(scale: int) -> str:
 
 def _has_new_kind(root) -> bool:
     """
-    Body/Warning 内の Kind/Status に「発表」「警報から注意報へ移行」などの
-    新規・変化ステータスが含まれる場合 True を返す。
+    Body/Warning 内の Kind の (Name, Status) ペアを検査し、投稿すべき変化があれば True。
 
-    Status が全て「継続」または「発表警報・注意報はなし」のみなら False
-    （定時再発表・同一内容の再送出 → 投稿しない）。
-    Status 要素が見つからない場合は True（安全側：投稿する）。
+    判定ルール（降順で評価）:
+      - Status が「発表」「移行」など既定のスキップ対象以外 → True（投稿する）
+      - Status が「解除」かつ Kind 名が「警報」を含む（特別警報含む）→ True（警報解除は投稿）
+      - Status が「解除」かつ Kind 名が「注意報」のみ → スキップ（注意報解除は見送り）
+      - Status が「継続」または「発表警報・注意報はなし」→ スキップ
+      - 上記以外が残らない（全件スキップ）→ False（投稿しない）
 
-    対象要素: Body > Warning type="気象警報・注意報（府県予報区等）" > Item > Kind > Status
+    Kind 要素が見つからない場合は True（安全側：投稿する）。
+
+    対象要素: Body > Warning > Item > Kind > (Name, Status)
     """
-    statuses: list[str] = []
+    kind_entries: list[tuple[str, str]] = []   # [(kind_name, status), ...]
+
     for elem in root.iter():
-        if local(elem.tag) == "Warning":
-            for kind_elem in elem.iter():
-                if local(kind_elem.tag) == "Status" and kind_elem.text:
-                    statuses.append(kind_elem.text.strip())
-    if not statuses:
-        return True   # ステータス情報なし → 安全側（投稿する）
-    # 「継続」と「発表警報・注意報はなし」以外のステータスが 1 つでもあれば新規
-    skip_values = {"継続", "発表警報・注意報はなし"}
-    return any(s not in skip_values for s in statuses)
+        if local(elem.tag) != "Warning":
+            continue
+        # Warning 配下の Kind 要素を収集
+        for kind_elem in elem.iter():
+            if local(kind_elem.tag) != "Kind":
+                continue
+            kind_name  = ""
+            kind_status = ""
+            for child in kind_elem:
+                t = local(child.tag)
+                if t == "Name" and child.text:
+                    kind_name = child.text.strip()
+                elif t == "Status" and child.text:
+                    kind_status = child.text.strip()
+            if kind_status:
+                kind_entries.append((kind_name, kind_status))
+
+    if not kind_entries:
+        return True   # Kind/Status 情報なし → 安全側（投稿する）
+
+    _skip = {"継続", "発表警報・注意報はなし"}
+
+    for kind_name, status in kind_entries:
+        if status in _skip:
+            continue
+        if status == "解除":
+            # 警報（特別警報含む）の解除は投稿する。
+            # 判定: 種別名に「警報」が含まれ、かつ「注意報」が含まれない
+            # 例: 「大雨警報」→ 投稿、「濃霧注意報」→ 見送り
+            if "警報" in kind_name and "注意報" not in kind_name:
+                return True   # 警報解除 → 投稿
+            continue          # 注意報解除 → 見送り
+        # 「発表」「警報から注意報へ移行」など上記以外は新規扱い
+        return True
+
+    return False
 
 
 # ===== 解除フィルタ =====
@@ -349,7 +388,20 @@ def _parse_weather_xml_full(data: bytes, product: str) -> tuple:
 
     dt_str = format_jst(report_dt)
     prefix = f"{dt_str} " if dt_str else ""
-    text   = truncate140(f"【{label}】{prefix}{headline}\n出典：気象庁")
+
+    # 「出典：気象庁」を必ず末尾に残し、140字を超える場合は句点「。」で切り詰める。
+    # 句点がない場合は 139字 + 「…」の省略形にする。
+    _CITATION = "\n出典：気象庁"
+    body = f"【{label}】{prefix}{headline}"
+    if len(body) + len(_CITATION) <= 140:
+        text = body + _CITATION
+    else:
+        max_body = 140 - len(_CITATION)
+        last_period = body[:max_body].rfind("。")
+        if last_period > 0:
+            text = body[:last_period + 1] + _CITATION
+        else:
+            text = body[:max_body - 1] + "…" + _CITATION
 
     return text, info_type, label, headline
 

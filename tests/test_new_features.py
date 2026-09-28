@@ -63,7 +63,8 @@ print("\n== P. WEATHER_PRODUCTS の内容確認 ==")
 ok("VPWW53 が含まれる", "VPWW53" in bot.WEATHER_PRODUCTS)
 ok("VXWW50（土砂災害警戒情報）が含まれる", "VXWW50" in bot.WEATHER_PRODUCTS)
 ok("VPOA50（記録的短時間大雨）が含まれる", "VPOA50" in bot.WEATHER_PRODUCTS)
-ok("VPHW62（竜巻注意情報）が含まれる",     "VPHW62" in bot.WEATHER_PRODUCTS)
+ok("VPHW50（竜巻注意情報）が含まれる",     "VPHW50" in bot.WEATHER_PRODUCTS)
+ok("VPHW51（竜巻注意情報・目撃情報付き）が含まれる", "VPHW51" in bot.WEATHER_PRODUCTS)
 
 ok("VPWW54（H27 重複フォーマット）が除外されている", "VPWW54" not in bot.WEATHER_PRODUCTS)
 ok("VPWW55（大雨 R06 分割）が除外されている",        "VPWW55" not in bot.WEATHER_PRODUCTS)
@@ -71,6 +72,7 @@ ok("VPWW56（土砂 R06 分割）が除外されている",        "VPWW56" not 
 ok("VPWW58（暴風 R06 分割）が除外されている",        "VPWW58" not in bot.WEATHER_PRODUCTS)
 ok("VPWW59（波浪 R06 分割）が除外されている",        "VPWW59" not in bot.WEATHER_PRODUCTS)
 ok("VPWW61（竜巻・雷 R06 分割）が除外されている",   "VPWW61" not in bot.WEATHER_PRODUCTS)
+ok("VPHW62（実在しない旧コード）が除外されている",   "VPHW62" not in bot.WEATHER_PRODUCTS)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -79,7 +81,7 @@ ok("VPWW61（竜巻・雷 R06 分割）が除外されている",   "VPWW61" not
 import xml.etree.ElementTree as ET
 
 def make_vpww53_xml(statuses: list[str]) -> bytes:
-    """Body/Warning に指定した Status 値を持つ VPWW53 XML を生成する"""
+    """Body/Warning に指定した Status 値を持つ VPWW53 XML を生成する（Kind 名は強風注意報）"""
     items = ""
     for st in statuses:
         items += f"""
@@ -92,6 +94,33 @@ def make_vpww53_xml(statuses: list[str]) -> bytes:
   <Head xmlns="http://xml.kishou.go.jp/jmaxml1/informationBasis1/">
     <Title>青森県気象警報・注意報</Title>
     <ReportDateTime>2026-09-28T23:14:00+09:00</ReportDateTime>
+    <InfoType>発表</InfoType>
+    <Headline>
+      <Text>青森県では、強風に注意してください。</Text>
+    </Headline>
+  </Head>
+  <Body xmlns="http://xml.kishou.go.jp/jmaxml1/body/meteorology1/">
+    <Warning type="気象警報・注意報（府県予報区等）">{items}
+    </Warning>
+  </Body>
+</Report>"""
+    return xml.encode("utf-8")
+
+
+def make_vpww53_xml_named(name_status_pairs: list[tuple[str, str]]) -> bytes:
+    """Body/Warning に指定した (Kind 名, Status) ペアを持つ VPWW53 XML を生成する"""
+    items = ""
+    for name, st in name_status_pairs:
+        items += f"""
+      <Item>
+        <Kind><Name>{name}</Name><Status>{st}</Status></Kind>
+        <Areas><Area><Name>青森県</Name><Code>020000</Code></Area></Areas>
+      </Item>"""
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Report xmlns="http://xml.kishou.go.jp/jmaxml1/">
+  <Head xmlns="http://xml.kishou.go.jp/jmaxml1/informationBasis1/">
+    <Title>青森県気象警報・注意報</Title>
+    <ReportDateTime>2026-09-28T20:19:00+09:00</ReportDateTime>
     <InfoType>発表</InfoType>
     <Headline>
       <Text>青森県では、強風に注意してください。</Text>
@@ -151,6 +180,38 @@ _root_dn = ET.fromstring(make_vpww53_xml(["継続", "警報から注意報へ移
 ok("Status=警報から注意報へ移行 → True (種類変化・投稿する)",
    bot._has_new_kind(_root_dn) is True)
 
+# ── Q2. 解除の判定（Kind 名ベース）──────────────────────────────
+print("\n== Q2. _has_new_kind() 解除の判定（Kind 名ベース）==")
+
+# 注意報のみ解除 → False（見送り）
+_root_chui_kaijo = ET.fromstring(make_vpww53_xml_named([("濃霧注意報", "解除")]))
+ok("注意報のみ解除 → False (見送り)",
+   bot._has_new_kind(_root_chui_kaijo) is False)
+
+# 注意報解除 + 継続 → False（見送り）
+_root_kaijo_keizoku = ET.fromstring(make_vpww53_xml_named([
+    ("雷注意報", "解除"), ("強風注意報", "継続"), ("濃霧注意報", "解除"),
+]))
+ok("注意報解除 + 継続 → False (見送り)",
+   bot._has_new_kind(_root_kaijo_keizoku) is False)
+
+# 警報解除 → True（投稿する）
+_root_keihou_kaijo = ET.fromstring(make_vpww53_xml_named([("大雨警報", "解除")]))
+ok("警報解除 → True (投稿する)",
+   bot._has_new_kind(_root_keihou_kaijo) is True)
+
+# 特別警報解除 → True（投稿する）
+_root_tokubetsu_kaijo = ET.fromstring(make_vpww53_xml_named([("大雨特別警報", "解除")]))
+ok("特別警報解除 → True (投稿する)",
+   bot._has_new_kind(_root_tokubetsu_kaijo) is True)
+
+# 注意報解除 + 警報解除 混在 → True（警報解除があるため投稿）
+_root_mixed_kaijo = ET.fromstring(make_vpww53_xml_named([
+    ("濃霧注意報", "解除"), ("大雨警報", "解除"), ("強風注意報", "継続"),
+]))
+ok("注意報解除 + 警報解除 混在 → True (警報解除あり・投稿する)",
+   bot._has_new_kind(_root_mixed_kaijo) is True)
+
 
 # ──────────────────────────────────────────────────────────────
 # R. VPWW53 継続のみ → parse_weather_xml が None を返す
@@ -186,6 +247,28 @@ _result_no_body = bot.parse_weather_xml(_xml_no_body, "VPWW53")
 ok("VPWW53 Status 要素なし → 投稿文が生成される（安全側）",
    _result_no_body is not None,
    str(_result_no_body)[:60] if _result_no_body else "None")
+
+# 注意報のみ解除 + 継続の VPWW53 → None（見送り）
+_xml_chui_kaijo = make_vpww53_xml_named([
+    ("雷注意報",  "解除"),
+    ("強風注意報", "継続"),
+    ("濃霧注意報", "解除"),
+])
+_result_chui_kaijo = bot.parse_weather_xml(_xml_chui_kaijo, "VPWW53")
+ok("VPWW53 注意報解除+継続 → None (見送り)",
+   _result_chui_kaijo is None,
+   f"got={_result_chui_kaijo!r:.60s}" if _result_chui_kaijo else "None")
+
+# 警報解除を含む VPWW53 → 投稿文が生成される
+_xml_keihou_kaijo = make_vpww53_xml_named([
+    ("濃霧注意報", "解除"),
+    ("大雨警報",   "解除"),
+    ("強風注意報", "継続"),
+])
+_result_keihou_kaijo = bot.parse_weather_xml(_xml_keihou_kaijo, "VPWW53")
+ok("VPWW53 警報解除を含む → 投稿文が生成される",
+   _result_keihou_kaijo is not None,
+   str(_result_keihou_kaijo)[:60] if _result_keihou_kaijo else "None")
 
 
 # ──────────────────────────────────────────────────────────────

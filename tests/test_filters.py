@@ -269,7 +269,7 @@ sample_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 for fname, product_code, expected_kw in [
     ("sample_VXWW50_020000.xml",        "VXWW50", "土砂災害警戒情報"),
     ("sample_VPOA50_020000.xml",        "VPOA50", "記録的短時間大雨情報"),
-    ("sample_VPHW62_020000.xml",        "VPHW62", "竜巻注意情報"),
+    ("sample_VPHW50_020000.xml",        "VPHW50", "竜巻注意情報"),
     ("sample_VTSE51_010000.xml",        "VTSE51", "津波情報"),
     ("sample_VXSE53_aomori_int3.xml",  "VXSE53", "地震情報"),
 ]:
