@@ -216,14 +216,87 @@ def truncate140(text: str) -> str:
     return text[:139] + "…"
 
 
-def classify_weather_label(product: str, headline: str) -> str:
-    """プロダクトコードとヘッドラインからラベルを決定"""
+def _kind_label_from_entries(kind_entries: list) -> str:
+    """
+    Kind/Status ペアのリストから最も重いラベルを返す。
+
+    投稿対象になるStatus（継続・発表警報・注意報はなし 以外）を持つKindの中で、
+    Kind名の末尾（「特別警報」「警報」「注意報」）から重みを決め最大を採用する。
+
+    重み: 特別警報(3) > 警報 / 危険警報(2) > 注意報(1)
+
+    投稿対象のKindがない（全件スキップ）場合は "" を返す。
+    呼び出し側は "" を受け取ったらフォールバック（見出し文キーワード判定）を使うこと。
+    """
+    _skip = {"継続", "発表警報・注意報はなし"}
+    max_weight = 0
+
+    for kind_name, status in kind_entries:
+        if status in _skip:
+            continue
+        name = kind_name.strip()
+        if name.endswith("特別警報"):
+            weight = 3
+        elif name.endswith("警報"):   # 危険警報・警報 の両方を含む（末尾が「警報」で一致）
+            weight = 2
+        elif name.endswith("注意報"):
+            weight = 1
+        else:
+            # Kind名が空、または未知のパターン → 注意報扱い（安全側ではなく最低限）
+            weight = 1
+
+        if weight > max_weight:
+            max_weight = weight
+
+    if max_weight == 3:
+        return "気象特別警報"
+    if max_weight == 2:
+        return "気象警報"
+    if max_weight == 1:
+        return "気象注意報"
+    return ""   # 投稿対象のKindなし → 呼び出し側でフォールバック
+
+
+def classify_weather_label(product: str, headline: str,
+                           kind_entries: "list | None" = None) -> str:
+    """
+    プロダクトコードとKind情報（またはヘッドライン）からラベルを決定。
+
+    Parameters
+    ----------
+    product      : プロダクトコード
+    headline     : 見出し文（Headline/Text）
+    kind_entries : [(kind_name, status), ...] Body/Warning から抽出した Kind 情報。
+                   提供された場合は Kind 名末尾でラベルを決定する（優先）。
+                   None / 空リストのときは従来の見出し文キーワード判定にフォールバック。
+
+    なぜ Kind 名基準か:
+      気象庁は「大雨警報」発表の見出し文を「北部では、低い土地の浸水に警戒してください。」
+      のように書くことがあり、見出し文に「警報」を含まないケースが実測で確認されている。
+      Kind/Name の末尾で確実に区分を識別できる。
+
+    「危険警報」について（2026年5月29日 防災気象情報体系整理）:
+      Kind/Name が「大雨危険警報」のように末尾「危険警報」で終わる場合、
+      末尾「警報」に一致するため【気象警報】に分類する。
+      ただし 2026-09-29 時点の7日間フィード（1,610電文）には
+      「危険警報」で終わる Kind/Name は存在しない（実測確認）。
+      見出し文の「〈危険警報（大雨）〉」プレフィックスは Kind/Name が「大雨警報」のままで
+      見出しにのみ表示される経過措置表記であり、本関数では見出し文を加工しない。
+    """
     if product == "VXWW50":
         return "土砂災害警戒情報"
     if product == "VPOA50":
         return "記録的短時間大雨情報"
     if product in {"VPHW50", "VPHW51"}:
         return "竜巻注意情報"
+
+    # Kind情報が提供されていれば Kind 名末尾でラベルを決定（メインロジック）
+    if kind_entries:
+        label = _kind_label_from_entries(kind_entries)
+        if label:
+            return label
+
+    # フォールバック：見出し文キーワード判定（Kind情報がない場合のみ）
     if "特別警報" in headline:
         return "気象特別警報"
     if "警報" in headline:
@@ -256,22 +329,14 @@ def p2p_scale_to_str(scale: int) -> str:
 
 # ===== VPWW53 Kind/Status チェック =====
 
-def _has_new_kind(root) -> bool:
+def _extract_kind_entries(root) -> list:
     """
-    Body/Warning 内の Kind の (Name, Status) ペアを検査し、投稿すべき変化があれば True。
-
-    判定ルール（降順で評価）:
-      - Status が「発表」「移行」など既定のスキップ対象以外 → True（投稿する）
-      - Status が「解除」かつ Kind 名が「警報」を含む（特別警報含む）→ True（警報解除は投稿）
-      - Status が「解除」かつ Kind 名が「注意報」のみ → スキップ（注意報解除は見送り）
-      - Status が「継続」または「発表警報・注意報はなし」→ スキップ
-      - 上記以外が残らない（全件スキップ）→ False（投稿しない）
-
-    Kind 要素が見つからない場合は True（安全側：投稿する）。
+    Body/Warning 内の Kind の (Name, Status) ペアを収集して返す。
+    Kind/Status 情報がない（または Body/Warning 要素がない）場合は空リストを返す。
 
     対象要素: Body > Warning > Item > Kind > (Name, Status)
     """
-    kind_entries: list[tuple[str, str]] = []   # [(kind_name, status), ...]
+    kind_entries: list = []   # [(kind_name, status), ...]
 
     for elem in root.iter():
         if local(elem.tag) != "Warning":
@@ -280,7 +345,7 @@ def _has_new_kind(root) -> bool:
         for kind_elem in elem.iter():
             if local(kind_elem.tag) != "Kind":
                 continue
-            kind_name  = ""
+            kind_name   = ""
             kind_status = ""
             for child in kind_elem:
                 t = local(child.tag)
@@ -291,6 +356,21 @@ def _has_new_kind(root) -> bool:
             if kind_status:
                 kind_entries.append((kind_name, kind_status))
 
+    return kind_entries
+
+
+def _has_new_kind_from_entries(kind_entries: list) -> bool:
+    """
+    Kind/Status ペアのリストを検査し、投稿すべき変化があれば True。
+
+    判定ルール（降順で評価）:
+      - kind_entries が空 → True（Kind/Status 情報なし → 安全側：投稿する）
+      - Status が「継続」または「発表警報・注意報はなし」→ スキップ
+      - Status が「解除」かつ Kind 名が「警報」を含む（特別警報含む）→ True（警報解除は投稿）
+      - Status が「解除」かつ Kind 名が「注意報」のみ → スキップ（注意報解除は見送り）
+      - 上記以外（「発表」「警報から注意報」など）→ True（投稿する）
+      - 全件スキップ → False（投稿しない）
+    """
     if not kind_entries:
         return True   # Kind/Status 情報なし → 安全側（投稿する）
 
@@ -306,10 +386,21 @@ def _has_new_kind(root) -> bool:
             if "警報" in kind_name and "注意報" not in kind_name:
                 return True   # 警報解除 → 投稿
             continue          # 注意報解除 → 見送り
-        # 「発表」「警報から注意報へ移行」など上記以外は新規扱い
+        # 「発表」「警報から注意報」など上記以外は新規扱い
         return True
 
     return False
+
+
+def _has_new_kind(root) -> bool:
+    """
+    Body/Warning 内の Kind の (Name, Status) ペアを検査し、投稿すべき変化があれば True。
+
+    後方互換のラッパー。_extract_kind_entries → _has_new_kind_from_entries を呼ぶ。
+    直接 kind_entries を渡したい場合は _has_new_kind_from_entries を使うこと。
+    """
+    kind_entries = _extract_kind_entries(root)
+    return _has_new_kind_from_entries(kind_entries)
 
 
 # ===== 解除フィルタ =====
@@ -371,7 +462,10 @@ def _parse_weather_xml_full(data: bytes, product: str) -> tuple:
         if "青森" not in title:
             return None, info_type, "", ""
 
-    label  = classify_weather_label(product, headline)
+    # VPWW53: Kind/Status を抽出（ラベル決定と変化チェックで共用）
+    kind_entries = _extract_kind_entries(root) if product == "VPWW53" else []
+
+    label = classify_weather_label(product, headline, kind_entries or None)
 
     # 注意報の解除はスキップ
     if _is_cancel_to_skip(headline, info_type):
@@ -379,7 +473,7 @@ def _parse_weather_xml_full(data: bytes, product: str) -> tuple:
 
     # VPWW53: Kind/Status が全て「継続」または「発表警報・注意報はなし」なら
     # 状態変化なし（定時再発表・同一内容の再送）→ 投稿しない
-    if product == "VPWW53" and not _has_new_kind(root):
+    if product == "VPWW53" and not _has_new_kind_from_entries(kind_entries):
         logging.info(
             f"  継続のみ: VPWW53 の全 Kind が継続ステータス → 投稿しない"
             f"（headline={headline[:40]}）"
